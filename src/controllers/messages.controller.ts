@@ -1,12 +1,9 @@
-import type { Request, Response } from "express";
-import { sendMail } from "../utils/sendMail.js";
+import type { Request, Response } from 'express';
+import { sendMail } from '../utils/sendMail.js';
 
 export const smsController = async (req: Request, res: Response) => {
   try {
     const { email, subject, html } = req.body;
-
-    
-  
 
     if (
       email.trim().length === 0 ||
@@ -15,7 +12,7 @@ export const smsController = async (req: Request, res: Response) => {
     ) {
       return res
         .status(200)
-        .json({ message: "All fields are required", success: false });
+        .json({ message: 'All fields are required', success: false });
     }
 
     const data: any = await sendMail({
@@ -24,20 +21,20 @@ export const smsController = async (req: Request, res: Response) => {
       html: html,
     });
 
-    console.log(data)
+    console.log(data);
 
     if (data.data == null) {
       return res
         .status(200)
-        .json({ message: "Email not sent", success: false });
+        .json({ message: 'Email not sent', success: false });
     }
     return res
       .status(200)
-      .json({ message: "Email sent successfully", success: true });
+      .json({ message: 'Email sent successfully', success: true });
   } catch (error) {
-    console.error("Error sending email:", error);
+    console.error('Error sending email:', error);
     return res
       .status(500)
-      .json({ message: "Failed to send email", success: false });
+      .json({ message: 'Failed to send email', success: false });
   }
 };
