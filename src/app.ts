@@ -1,7 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
-import messageRoute from './routes/messages.route.js';
 import whatsappRoute from './routes/whatsapp.messages.route.js';
 import cors from 'cors';
 
@@ -20,7 +19,7 @@ app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 app.use(cookieParser());
 
-app.use('/api/messages/', messageRoute);
+
 
 app.get('/webhook/whatsapp', (req, res) => {
   const verify_token = '1234';

@@ -1,15 +1,14 @@
 import axios from 'axios';
-import type { Request, Response } from 'express';
-import axiosInstance from '../utils/axios.js';
-import { uploadFileToGoogleDrive } from '../utils/googleApis.js';
-import { uploadToCloudinary } from '../utils/cloudinary.js';
-
-import { uploadImageToSupabase } from '../utils/uploadImageToSupabase.js';
+import type { Request, Response, Express } from 'express';
 import { supabase } from '../helper/supabase.js';
+import axiosInstance from '../utils/axios.js';
+import { uploadToCloudinary } from '../utils/cloudinary.js';
+import { uploadImageToSupabase } from '../utils/uploadImageToSupabase.js';
+
 
 export const whatsappSendTransationPdf = async (req: Request, res: Response) => {
-  const { clientName, clientNumber, storeId, storeName, invoiceNo } = (req as any).body || {};
-  const file = (req as any).file as any;
+  const { clientName, clientNumber, storeId, storeName } = (req as any).body || {};
+  const file = (req as any).file as Express.Multer.File | undefined;
 
   if (!clientName || !clientNumber) {
     return res.status(400).json({
@@ -849,8 +848,6 @@ export const sendWhatsAppBulk = async (req: Request, res: Response) => {
         },
       };
 
-      console.log(payLoad, 'payload');
-      return;
       try {
         const { data } = await axios({
           method: 'POST',
