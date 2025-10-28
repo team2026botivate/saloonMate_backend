@@ -1,8 +1,10 @@
+import { doStaffPaymentStatusReset } from './utils/supabase-working-task.utils.js';
 import express from 'express';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import whatsappRoute from './routes/whatsapp.messages.route.js';
 import cors from 'cors';
+import { cornJob } from './utils/cornJob-utils.js';
 
 dotenv.config();
 
@@ -44,6 +46,13 @@ app.post('/webhook/whatsapp', (req, res) => {
 });
 
 app.use('/api/messages/whatsapp', whatsappRoute);
+
+// using the cron job to reset the staff payment status
+
+cornJob({
+  pattern: '0 0 1 * *',
+  task: doStaffPaymentStatusReset,
+});
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
