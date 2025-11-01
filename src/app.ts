@@ -6,6 +6,8 @@ import whatsappRoute from './routes/whatsapp.messages.route.js';
 import cors from 'cors';
 import { cornJob } from './utils/cornJob-utils.js';
 
+import eCommnerceStoreRoute from './routes/eCommnerce-store.routes.js';
+
 dotenv.config();
 
 const app = express();
@@ -46,6 +48,7 @@ app.post('/webhook/whatsapp', (req, res) => {
 });
 
 app.use('/api/messages/whatsapp', whatsappRoute);
+app.use('/api/store', eCommnerceStoreRoute);
 
 // using the cron job to reset the staff payment status
 
