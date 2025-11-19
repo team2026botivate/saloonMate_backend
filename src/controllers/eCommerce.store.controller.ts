@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { supabase } from '../helper/supabase.js';
-import { json } from 'stream/consumers';
 
 export const getAllProduct = async (req: Request, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
@@ -72,16 +71,32 @@ export const addToCart = async (req: Request, res: Response) => {
       .eq('store_id', store_id)
       .maybeSingle();
 
+    // If it exists, increment quantity
     if (data) {
-      return res.status(400).json({ message: 'Product already in cart' });
+      const newQty = (data.quantity ?? 0) + (quantity ? Number(quantity) : 1);
+      const { data: updated, error: updateError } = await supabase
+        .from('saloon_e_commerce_cart_items')
+        .update({ quantity: newQty })
+        .eq('id', data.id)
+        .select();
+
+      if (updateError) throw updateError;
+
+      return res.status(200).json({
+        success: true,
+        message: 'Cart quantity updated',
+        data: updated,
+      });
     }
 
+    // Otherwise insert a new row with quantity default 1 if not provided
+    const insertQty = quantity ? Number(quantity) : 1;
     const { data: cartData, error } = await supabase
       .from('saloon_e_commerce_cart_items')
       .insert({
         product_id: productId,
         store_id: store_id,
-        quantity: quantity,
+        quantity: insertQty,
         price_snapshot: price,
       })
       .select();
@@ -90,19 +105,17 @@ export const addToCart = async (req: Request, res: Response) => {
 
     console.log(cartData, 'data after creating the product');
 
-    return res.status(200).json({ message: 'Product added successfully', data: cartData });
+    return res
+      .status(200)
+      .json({ success: true, message: 'Product added successfully', data: cartData });
   } catch (error) {
     console.log(error, 'error');
-    return res.status(500).json({ message: 'Internal server error', error: error });
+    return res.status(500).json({ success: false, message: 'Internal server error', error: error });
   }
 };
 
 export async function addProduct(req: Request, res: Response) {
   try {
-    // Support multiple posting styles:
-    // - Proper JSON: req.body = { products: [...], store_id?: string }
-    // - Nested stringified: req.body = { body: "{\"products\":[...] , \"store_id\": \"...\" }" }
-    // - Raw array/object: req.body = [...]/{}
     let parsed: any = req.body;
     if (parsed && typeof parsed.body === 'string') {
       try {
@@ -195,6 +208,80 @@ export async function addProduct(req: Request, res: Response) {
     return res.status(201).json({ message: 'Product(s) created successfully', success: true });
   } catch (error: any) {
     console.log(error, 'addProduct error');
+    return res.status(500).json({ message: 'Internal server error', error, success: false });
+  }
+}
+
+export async function ecommerce_payment(req: Request, res: Response) {
+  const { paymentMethod, amount, store_id, payment_status } = req.body;
+
+  if (!paymentMethod || !store_id) {
+    return res.status(400).json({ message: 'Payment method and store_id are required' });
+  }
+
+  const finalStatus = payment_status || 'paid';
+
+  try {
+    // 0) Compute total from pending cart items for this store
+    const { data: pendingItems, error: sumError } = await supabase
+      .from('saloon_e_commerce_cart_items')
+      .select('quantity, price_snapshot')
+      .eq('store_id', store_id)
+      .eq('payment_status', 'pending');
+
+    if (sumError) throw sumError;
+
+    const computedTotal = Array.isArray(pendingItems)
+      ? pendingItems.reduce((acc: number, it: any) => {
+          const qty = Number(it?.quantity ?? 0) || 0;
+          const price = Number(it?.price_snapshot ?? 0) || 0;
+          return acc + qty * price;
+        }, 0)
+      : 0;
+
+    const finalAmount = computedTotal > 0 ? computedTotal : Number(amount) || 0;
+
+    // 1) Create order record
+    try {
+      const { error: orderError } = await supabase.from('saloon_e_commerce_cart_items').insert({
+        payment_method: paymentMethod,
+        payment_status: finalStatus,
+        amount: finalAmount,
+        total_amount: finalAmount,
+        status: 'done',
+        store_id,
+      });
+      if (orderError) {
+        // Log but do not fail entire payment flow if orders table is missing or insert fails
+        console.log(orderError, 'ecommerce_payment order insert error');
+      }
+    } catch (e) {
+      console.log(e, 'orders insert unexpected error');
+    }
+
+    // 2) Mark all pending cart items for this store as done (no longer pending)
+    const { error: updateError } = await supabase
+      .from('saloon_e_commerce_cart_items')
+      .update({ payment_status: 'done', payment_method: paymentMethod })
+      .eq('store_id', store_id)
+      .eq('payment_status', 'pending');
+
+    if (updateError) {
+      console.log(updateError, 'cart status update error');
+      // Not fatal for order creation, but inform client
+      return res.status(200).json({
+        success: true,
+        message: 'Order created, but failed to update some cart items status. Please refresh.',
+      });
+    }
+
+    return res.status(201).json({
+      message: 'Payment processed successfully',
+      success: true,
+      total_amount: finalAmount,
+    });
+  } catch (error) {
+    console.log(error, 'ecommerce_payment error');
     return res.status(500).json({ message: 'Internal server error', error, success: false });
   }
 }
