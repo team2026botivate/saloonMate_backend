@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../helper/supabase.js';
+import { json } from 'stream/consumers';
 
 export const getAllProduct = async (req: Request, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
@@ -71,8 +72,6 @@ export const addToCart = async (req: Request, res: Response) => {
       .eq('store_id', store_id)
       .maybeSingle();
 
-    console.log(!data, 'data');
-
     if (data) {
       return res.status(400).json({ message: 'Product already in cart' });
     }
@@ -100,11 +99,32 @@ export const addToCart = async (req: Request, res: Response) => {
 
 export async function addProduct(req: Request, res: Response) {
   try {
-    const body = req.body;
+    // Support multiple posting styles:
+    // - Proper JSON: req.body = { products: [...], store_id?: string }
+    // - Nested stringified: req.body = { body: "{\"products\":[...] , \"store_id\": \"...\" }" }
+    // - Raw array/object: req.body = [...]/{}
+    let parsed: any = req.body;
+    if (parsed && typeof parsed.body === 'string') {
+      try {
+        parsed = JSON.parse(parsed.body);
+      } catch (e) {
+        return res.status(400).json({ message: 'Invalid JSON in body.body' });
+      }
+    } else if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch (e) {
+        return res.status(400).json({ message: 'Invalid JSON body string' });
+      }
+    }
+
+    const body = parsed;
     let products: any[] = [];
 
     if (Array.isArray(body?.products)) {
       products = body.products;
+    } else if (Array.isArray(body)) {
+      products = body;
     } else if (body && typeof body === 'object') {
       products = [body];
     }
@@ -125,8 +145,14 @@ export async function addProduct(req: Request, res: Response) {
         .replace(/\s+/g, '-')
         .replace(/-+/g, '-');
 
-    // Map to DB columns used elsewhere in this codebase
-    // Table: saloon_e_commerce_products
+    // Derive store_id from payload, query or header (used when client omits per-item store id)
+    const incomingStoreId =
+      (body?.store_id ??
+        body?.storeId ??
+        (req.query.store_id as string) ??
+        (req.headers['x-store-id'] as string)) ||
+      null;
+
     const nowSuffix = Date.now().toString().slice(-6); // short suffix to avoid slug collisions
     const rows = products.map((p) => {
       const name = (p.name ?? '').toString();
@@ -137,30 +163,38 @@ export async function addProduct(req: Request, res: Response) {
         description: p.description ?? '',
         price: p.price !== undefined && p.price !== null ? Number(p.price) : null,
         image_url: p.image_url ?? p.imageUrl ?? null, // support both keys
-        store_id: p.store_id ?? p.storeId ?? null,
+        store_id: p.store_id ?? p.storeId ?? incomingStoreId,
         slug, // ensure NOT NULL slug column is satisfied
       };
     });
 
-    // Basic validation: require name
     const invalid = rows.find((r) => !r.name || r.name.trim() === '');
     if (invalid) {
       return res.status(400).json({ message: 'Each product must include a name' });
     }
 
-    const { data, error } = await supabase
-      .from('saloon_e_commerce_products')
-      .insert(rows)
-      .select('*');
+    // Validate store_id present for all rows
+    const missingStore = rows.find((r) => !r.store_id || `${r.store_id}`.trim() === '');
+    if (missingStore) {
+      return res.status(400).json({ message: 'store_id is required for each product' });
+    }
+
+    // Ensure price is a valid number when provided
+    const invalidPrice = rows.find((r) => r.price !== null && Number.isNaN(Number(r.price)));
+    if (invalidPrice) {
+      return res.status(400).json({ message: 'price must be a valid number' });
+    }
+
+    const { error } = await supabase.from('saloon_e_commerce_products').insert(rows);
 
     if (error) {
       console.log(error, 'addProduct insert error');
       return res.status(500).json({ message: 'Failed to create product(s)', error: error.message });
     }
 
-    return res.status(201).json({ message: 'Product(s) created successfully', data });
+    return res.status(201).json({ message: 'Product(s) created successfully', success: true });
   } catch (error: any) {
     console.log(error, 'addProduct error');
-    return res.status(500).json({ message: 'Internal server error', error });
+    return res.status(500).json({ message: 'Internal server error', error, success: false });
   }
 }
