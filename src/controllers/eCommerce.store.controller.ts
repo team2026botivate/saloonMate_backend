@@ -57,19 +57,27 @@ export const getAllProduct = async (req: Request, res: Response) => {
 };
 
 export const addToCart = async (req: Request, res: Response) => {
-  const { productId, store_id, price, quantity } = req.body;
+  const { productId, store_id, price, quantity, user_id } = req.body;
 
   if (!productId || !store_id) {
     return res.status(400).json({ message: 'Product ID and store ID are required' });
   }
 
   try {
-    const { data } = await supabase
+    let query = supabase
       .from('saloon_e_commerce_cart_items')
       .select('*')
       .eq('product_id', productId)
       .eq('store_id', store_id)
-      .maybeSingle();
+      .eq('payment_status', 'pending');
+
+    if (user_id) {
+      query = query.eq('user_id', user_id);
+    } else {
+      query = query.is('user_id', null);
+    }
+
+    const { data } = await query.maybeSingle();
 
     // If it exists, increment quantity
     if (data) {
@@ -98,6 +106,7 @@ export const addToCart = async (req: Request, res: Response) => {
         store_id: store_id,
         quantity: insertQty,
         price_snapshot: price,
+        user_id: user_id || null,
       })
       .select();
 
@@ -177,6 +186,7 @@ export async function addProduct(req: Request, res: Response) {
         price: p.price !== undefined && p.price !== null ? Number(p.price) : null,
         image_url: p.image_url ?? p.imageUrl ?? null, // support both keys
         store_id: p.store_id ?? p.storeId ?? incomingStoreId,
+        stock: p.stock !== undefined && p.stock !== null ? Number(p.stock) : 0,
         slug, // ensure NOT NULL slug column is satisfied
       };
     });
@@ -213,7 +223,7 @@ export async function addProduct(req: Request, res: Response) {
 }
 
 export async function ecommerce_payment(req: Request, res: Response) {
-  const { paymentMethod, amount, store_id, payment_status } = req.body;
+  const { paymentMethod, amount, store_id, payment_status, user_id } = req.body;
 
   if (!paymentMethod || !store_id) {
     return res.status(400).json({ message: 'Payment method and store_id are required' });
@@ -222,56 +232,102 @@ export async function ecommerce_payment(req: Request, res: Response) {
   const finalStatus = payment_status || 'paid';
 
   try {
-    // 0) Compute total from pending cart items for this store
-    const { data: pendingItems, error: sumError } = await supabase
+    // 0) Fetch all pending cart items for this store (including product details for audit)
+    let query = supabase
       .from('saloon_e_commerce_cart_items')
-      .select('quantity, price_snapshot')
+      .select(
+        `id, product_id, quantity, price_snapshot, store_id,
+         product:product_id ( id, name, price )`
+      )
       .eq('store_id', store_id)
       .eq('payment_status', 'pending');
 
-    if (sumError) throw sumError;
+    if (user_id) {
+      query = query.eq('user_id', user_id);
+    } else {
+      query = query.is('user_id', null);
+    }
+
+    const { data: pendingItems, error: pendingError } = await query;
+
+    if (pendingError) throw pendingError;
 
     const computedTotal = Array.isArray(pendingItems)
       ? pendingItems.reduce((acc: number, it: any) => {
           const qty = Number(it?.quantity ?? 0) || 0;
-          const price = Number(it?.price_snapshot ?? 0) || 0;
+          const price = Number(it?.price_snapshot ?? it?.product?.price ?? 0) || 0;
           return acc + qty * price;
         }, 0)
       : 0;
 
     const finalAmount = computedTotal > 0 ? computedTotal : Number(amount) || 0;
 
-    // 1) Create order record
-    try {
-      const { error: orderError } = await supabase.from('saloon_e_commerce_cart_items').insert({
+    // 1) Create order in orders table
+    const orderNumber = `ORD-${Date.now()}`;
+    const { data: orderRows, error: orderErr } = await supabase
+      .from('saloon_e_commerce_orders')
+      .insert({
+        store_id,
+        order_number: orderNumber,
+        total_amount: finalAmount,
         payment_method: paymentMethod,
         payment_status: finalStatus,
-        amount: finalAmount,
-        total_amount: finalAmount,
-        status: 'done',
-        store_id,
+        status: 'PLACED',
+      })
+      .select('id')
+      .limit(1);
+
+    if (orderErr) throw orderErr;
+    const orderId = orderRows?.[0]?.id;
+
+    // 2) Create order items for each pending cart item
+    if (orderId && Array.isArray(pendingItems) && pendingItems.length > 0) {
+      const orderItems = pendingItems.map((it: any) => {
+        const unit = Number(it?.price_snapshot ?? it?.product?.price ?? 0) || 0;
+        const qty = Number(it?.quantity ?? 0) || 0;
+        return {
+          order_id: orderId,
+          product_id: it.product_id,
+          product_name: it.product?.name ?? null,
+          quantity: qty,
+          unit_price: unit,
+          total_price: unit * qty,
+        };
       });
-      if (orderError) {
-        // Log but do not fail entire payment flow if orders table is missing or insert fails
-        console.log(orderError, 'ecommerce_payment order insert error');
-      }
-    } catch (e) {
-      console.log(e, 'orders insert unexpected error');
+
+      const { error: itemsErr } = await supabase
+        .from('saloon_e_commerce_order_items')
+        .insert(orderItems);
+      if (itemsErr) throw itemsErr;
     }
 
-    // 2) Mark all pending cart items for this store as done (no longer pending)
-    const { error: updateError } = await supabase
+    // 3) Mark all pending cart items as done and link to order
+    let updateQuery = supabase
       .from('saloon_e_commerce_cart_items')
-      .update({ payment_status: 'done', payment_method: paymentMethod })
+      .update({
+        payment_status: 'done',
+        payment_method: paymentMethod,
+        order_id: orderId,
+        status: 'done',
+      })
       .eq('store_id', store_id)
       .eq('payment_status', 'pending');
 
+    if (user_id) {
+      updateQuery = updateQuery.eq('user_id', user_id);
+    } else {
+      updateQuery = updateQuery.is('user_id', null);
+    }
+
+    const { error: updateError } = await updateQuery;
+
     if (updateError) {
       console.log(updateError, 'cart status update error');
-      // Not fatal for order creation, but inform client
       return res.status(200).json({
         success: true,
-        message: 'Order created, but failed to update some cart items status. Please refresh.',
+        message: 'Payment recorded, but failed to update some cart items. Please refresh.',
+        order_id: orderId,
+        total_amount: finalAmount,
       });
     }
 
@@ -279,6 +335,7 @@ export async function ecommerce_payment(req: Request, res: Response) {
       message: 'Payment processed successfully',
       success: true,
       total_amount: finalAmount,
+      order_id: orderId,
     });
   } catch (error) {
     console.log(error, 'ecommerce_payment error');
