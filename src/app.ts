@@ -49,6 +49,9 @@ app.post('/webhook/whatsapp', (req, res) => {
 
 app.use('/api/messages/whatsapp', whatsappRoute);
 app.use('/api/store', eCommnerceStoreRoute);
+app.get('/', (req, res) => {
+  res.send('Hello World!');
+});
 
 // using the cron job to reset the staff payment status
 
@@ -57,6 +60,6 @@ cornJob({
   task: doStaffPaymentStatusReset,
 });
 
-app.listen(port, () => {
+app.listen(port as number,"0.0.0.0" ,() => {
   console.log(`Server is running on port ${port}`);
 });

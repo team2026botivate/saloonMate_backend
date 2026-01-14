@@ -37,6 +37,8 @@ COPY --from=builder /app/dist ./dist
 RUN chown -R appuser:appgroup /app
 USER appuser
 
+# Expose the port the app runs on
+EXPOSE 3002
 
 # Start your app (matches "start" in package.json)
 CMD ["node", "dist/app.js"]

@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  saloonmate-backend:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: saloonmate-backend
+    ports:
+      - '3002:3002'
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Optional: Uncomment if you want persistent logs
+    # volumes:
+    #   - ./logs:/app/logs
+    networks:
+      - saloonmate-network
+
+networks:
+  saloonmate-network:
+    driver: bridge
