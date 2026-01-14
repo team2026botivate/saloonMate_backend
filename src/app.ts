@@ -12,16 +12,27 @@ dotenv.config();
 
 const app = express();
 
-const allowOrigin = ['http://localhost:3000', process.env.FRONT_END_URL].filter(
-  Boolean
-) as string[];
+const allowOrigin = [
+  'http://localhost:3000',
+  process.env.FRONT_END_URL,
+].filter(Boolean);
 
 app.use(
   cors({
-    origin: allowOrigin,
+    origin: (origin, callback) => {
+      // allow server-to-server & Postman
+      if (!origin) return callback(null, true);
+
+      if (allowOrigin.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
   })
 );
+
 const port = process.env.PORT || 3002;
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
